@@ -238,13 +238,54 @@ let popCoins = false;
 
 function uid() { return 'p' + Math.random().toString(36).slice(2, 9); }
 function newState() { return { v: 1, lv: LV, sound: true, vol: 3, pin: '1234', requirePin: false, famKey: '', requireCode: false, active: null, profiles: [], updatedAt: 0 }; }
+function okLevel(c) { return !!(c && typeof c === 'object' && DIFFS[c.diff] && Number.isFinite(+c.idx) && +c.idx >= 0 && Array.isArray(c.revealed) && Array.isArray(c.bonus)); }
 function migrate() {
+  // Recupera estructuras antiguas o parcialmente dañadas sin descartar perfiles.
+  if (!state || typeof state !== 'object' || Array.isArray(state)) state = newState();
+  if (!Array.isArray(state.profiles)) state.profiles = [];
+  state.profiles = state.profiles.filter(p => p && typeof p === 'object');
   if (state.sound === undefined) state.sound = true;
-  if (!state.vol) state.vol = 3;
-  if (state.famKey === undefined) state.famKey = '';
+  state.vol = Number.isFinite(+state.vol) ? Math.max(1, Math.min(5, Math.round(+state.vol))) : 3;
+  if (state.famKey === undefined || typeof state.famKey !== 'string') state.famKey = '';
   if (state.requireCode === undefined) state.requireCode = false;
-  state.profiles.forEach(p => { if (!p.saved) p.saved = {}; if (!p.family) p.family = []; if (!p.meds.alerts) p.meds.alerts = {}; });
-  if (state.lv !== LV) { state.profiles.forEach(p => { if (p.current) { p.credits += LEVEL_COST; p.current = null; } Object.keys(p.saved).forEach(k => { p.credits += LEVEL_COST; }); p.saved = {}; }); state.lv = LV; }
+  if (state.requirePin === undefined) state.requirePin = false;
+  if (typeof state.pin !== 'string' || !/^\d{4}$/.test(state.pin)) state.pin = '1234';
+  state.profiles.forEach(p => {
+    if (!p.id) p.id = uid();
+    if (typeof p.name !== 'string' || !p.name.trim()) p.name = 'Jugador';
+    if (!Number.isFinite(+p.credits) || +p.credits < 0) p.credits = START_CREDITS;
+    p.credits = Math.floor(+p.credits);
+    if (!DIFFS[p.diff]) p.diff = 'facil';
+    if (!p.progress || typeof p.progress !== 'object') p.progress = {};
+    Object.keys(DIFFS).forEach(k => { p.progress[k] = Number.isFinite(+p.progress[k]) && +p.progress[k] >= 0 ? Math.floor(+p.progress[k]) : 0; });
+    if (!p.saved || typeof p.saved !== 'object' || Array.isArray(p.saved)) p.saved = {};
+    if (p.current !== undefined && !okLevel(p.current)) p.current = null;
+    if (p.current === undefined) p.current = null;
+    Object.keys(p.saved).forEach(k => { if (!DIFFS[k] || !okLevel(p.saved[k]) || p.saved[k].diff !== k) delete p.saved[k]; });
+    if (!Array.isArray(p.family)) p.family = [];
+    p.family = p.family.filter(c => c && typeof c === 'object').slice(0, 3).map(c => ({ name: String(c.name || '').slice(0, 40), phone: String(c.phone || '').slice(0, 30) }));
+    if (!p.meds || typeof p.meds !== 'object') p.meds = {};
+    if (!Array.isArray(p.meds.times)) p.meds.times = [];
+    p.meds.times = [...new Set(p.meds.times.filter(t => typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t)))].sort();
+    p.meds.perDose = Number.isFinite(+p.meds.perDose) ? Math.max(1, Math.min(20, Math.floor(+p.meds.perDose))) : 5;
+    if (!p.meds.claims || typeof p.meds.claims !== 'object' || Array.isArray(p.meds.claims)) p.meds.claims = {};
+    Object.keys(p.meds.claims).forEach(k => { if (!Array.isArray(p.meds.claims[k])) delete p.meds.claims[k]; else p.meds.claims[k] = [...new Set(p.meds.claims[k].filter(t => typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t)))]; });
+    if (!p.meds.alerts || typeof p.meds.alerts !== 'object' || Array.isArray(p.meds.alerts)) p.meds.alerts = {};
+    if (!p.stats || typeof p.stats !== 'object') p.stats = {};
+    ['levels', 'words', 'bonus'].forEach(k => { p.stats[k] = Number.isFinite(+p.stats[k]) && +p.stats[k] >= 0 ? Math.floor(+p.stats[k]) : 0; });
+    if (!p.stats.days || typeof p.stats.days !== 'object') p.stats.days = {};
+    if (!p.pendingClaim || typeof p.pendingClaim !== 'object') p.pendingClaim = null;
+    if (!p.pendingCode || typeof p.pendingCode !== 'object') p.pendingCode = null;
+  });
+  if (state.lv !== LV) {
+    state.profiles.forEach(p => {
+      if (p.current) { p.credits += LEVEL_COST; p.current = null; }
+      Object.keys(p.saved).forEach(k => { p.credits += LEVEL_COST; });
+      p.saved = {};
+    });
+    state.lv = LV;
+  }
+  if (!state.profiles.some(p => p.id === state.active)) state.active = state.profiles[0] ? state.profiles[0].id : null;
 }
 function newProfile(name) {
   return {
@@ -255,7 +296,7 @@ function newProfile(name) {
     stats: { levels: 0, words: 0, bonus: 0, days: {} }
   };
 }
-function loadLocal() { try { const s = localStorage.getItem(LS_KEY); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
+function loadLocal() { try { const s = localStorage.getItem(LS_KEY); if (!s) return null; const parsed = JSON.parse(s); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null; } catch (e) { return null; } }
 function saveLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {} }
 function persist() {
   state.updatedAt = Date.now(); saveLocal(); dirty = true;
@@ -263,11 +304,17 @@ function persist() {
 }
 async function flushDb() {
   if (!dbDoc || !dirty) return;
-  if (saving) { saveTimer = setTimeout(flushDb, 700); return; }
-  saving = true; dirty = false;
-  try { await dbDoc.set({ json: JSON.stringify(state), updatedAt: state.updatedAt }); dbOk = true; }
+  if (saving) { clearTimeout(saveTimer); saveTimer = setTimeout(flushDb, 900); return; }
+  saving = true;
+  const snapshot = JSON.stringify(state), version = state.updatedAt;
+  dirty = false;
+  try { await dbDoc.set({ json: snapshot, updatedAt: version }); dbOk = true; }
   catch (e) { dirty = true; dbOk = false; }
-  saving = false;
+  finally {
+    saving = false;
+    // Si hubo cambios durante el guardado o falló la red, vuelve a intentar.
+    if (dirty && dbDoc) { clearTimeout(saveTimer); saveTimer = setTimeout(flushDb, dbOk ? 700 : 5000); }
+  }
 }
 async function initDb() {
   try {
@@ -345,30 +392,35 @@ function dayKey(d) { d = d || new Date(); return d.getFullYear() + '-' + pad(d.g
 function dayStr(d) { d = d || new Date(); return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()); }
 function prof() { return state.profiles.find(p => p.id === state.active) || null; }
 function minutes(t) { const a = t.split(':').map(Number); return a[0] * 60 + a[1]; }
-function levelOf(diff, idx) { const L = LEVELS[diff]; return L[idx % L.length]; }
-function dayStats(p) { const k = dayKey(); return (p.stats.days[k] = p.stats.days[k] || { levels: 0, words: 0, doses: 0 }); }
+function levelOf(diff, idx) { const L = LEVELS && LEVELS[diff]; if (!Array.isArray(L) || !L.length) throw new Error('No hay niveles cargados para la dificultad: ' + diff); return L[((idx % L.length) + L.length) % L.length]; }
+function dayStats(p) { const k = dayKey(); const d = p.stats.days[k] = p.stats.days[k] || {}; ['levels', 'words', 'doses'].forEach(x => { if (!Number.isFinite(+d[x]) || +d[x] < 0) d[x] = 0; }); return d; }
 function greeting() { const h = new Date().getHours(); return h < 12 ? 'Buenos días' : h < 20 ? 'Buenas tardes' : 'Buenas noches'; }
 function shuffled(arr) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 
 /* ===== Remedios ===== */
 function medStatus(p) {
+  if (!p || !p.meds) return { st: 'none' };
   const now = new Date(), nowM = now.getHours() * 60 + now.getMinutes();
-  const times = p.meds.times.filter(Boolean).sort();
+  const times = [...new Set((Array.isArray(p.meds.times) ? p.meds.times : []).filter(t => typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t)))].sort();
   if (!times.length) return { st: 'none' };
-  const claimed = p.meds.claims[dayKey(now)] || [];
+  const claims = p.meds.claims && p.meds.claims[dayKey(now)];
+  const claimed = Array.isArray(claims) ? claims : [];
   let cur = -1;
   times.forEach((t, i) => { if (minutes(t) - GRACE_MIN <= nowM) cur = i; });
   if (cur >= 0 && !claimed.includes(times[cur])) return { st: 'ready', time: times[cur] };
   const next = times.find(t => minutes(t) - GRACE_MIN > nowM);
   return { st: cur >= 0 ? 'done' : 'wait', next: next || null, first: times[0] };
 }
-function claimDose(p) {
+function claimDose(p, requestedTime) {
   const s = medStatus(p);
-  if (s.st !== 'ready') return false;
+  if (s.st !== 'ready' || (requestedTime && s.time !== requestedTime)) return false;
   const k = dayKey();
-  (p.meds.claims[k] = p.meds.claims[k] || []).push(s.time);
+  p.meds.claims = p.meds.claims || {};
+  p.meds.claims[k] = Array.isArray(p.meds.claims[k]) ? p.meds.claims[k] : [];
+  if (p.meds.claims[k].includes(s.time)) return false;
+  p.meds.claims[k].push(s.time);
   Object.keys(p.meds.claims).sort().slice(0, -14).forEach(x => delete p.meds.claims[x]);
-  p.credits += p.meds.perDose;
+  p.credits = Math.max(0, Number(p.credits) || 0) + Math.max(1, Math.min(20, Number(p.meds.perDose) || 5));
   dayStats(p).doses++;
   persist();
   SND.coin();
@@ -448,10 +500,11 @@ function readConfirm() {
 const PENDING_MAX_MIN = 30;
 function finishPending(ok) {
   const p = prof(); if (!p || !p.pendingClaim) return;
-  if (Date.now() - p.pendingClaim.ts > PENDING_MAX_MIN * 60000) { p.pendingClaim = null; persist(); return; }
+  if (Date.now() - p.pendingClaim.ts > PENDING_MAX_MIN * 60000) { p.pendingClaim = null; persist(); closeModal(); return; }
   if (!ok) return;
+  const requestedTime = p.pendingClaim.time;
   p.pendingClaim = null;
-  if (claimDose(p)) popCoins = true;
+  if (claimDose(p, requestedTime)) popCoins = true;
   persist(); modal = null; render();
   const c = $('#creditNum'); if (c) c.textContent = p.credits;
 }
@@ -514,6 +567,7 @@ function closeModal() { modal = null; renderModal(); }
 
 function render() {
   const app = $('#app');
+  if (!app) return;
   document.documentElement.classList.toggle('lock', view === 'game');
   app.className = view === 'game' ? 'game' : '';
   if (view === 'who') app.innerHTML = viewWho();
@@ -854,6 +908,7 @@ function viewConfirm() {
 /* ===== Ventanas ===== */
 function renderModal() {
   const el = $('#modal');
+  if (!el) return;
   if (!modal) { el.innerHTML = ''; return; }
   const p = prof();
   let h = '';
@@ -954,11 +1009,15 @@ document.addEventListener('click', function (e) {
   else if (a === 'codeok') {
     const pc = p && p.pendingCode; if (!pc) { closeModal(); return; }
     const v = ($('#codeinput').value || '').trim();
-    if (/^\d{4}$/.test(v) && v === famCode(state.famKey, pc.r, pc.t.replace(':', ''), pc.d)) {
-      p.pendingCode = null; persist();
-      if (claimDose(p)) popCoins = true;
-      modal = null; render();
-      const c = $('#creditNum'); if (c) c.textContent = p.credits;
+    const codeIsCurrent = pc.d === dayStr() && Date.now() - pc.ts <= 3 * 3600000;
+    if (/^\d{4}$/.test(v) && codeIsCurrent && v === famCode(state.famKey, pc.r, pc.t.replace(':', ''), pc.d)) {
+      if (claimDose(p, pc.t)) {
+        p.pendingCode = null; persist(); popCoins = true;
+        modal = null; render();
+        const c = $('#creditNum'); if (c) c.textContent = p.credits;
+      } else {
+        p.pendingCode = null; persist(); modal.err = 'Este aviso ya venció o esa dosis ya fue confirmada. Vuelve a intentarlo en el horario que corresponda.'; renderModal();
+      }
     } else {
       pc.tries++;
       if (pc.tries >= 3) { newChallenge(p, pc.t); modal.err = 'Ese código no coincide y ya no quedan intentos. Toca de nuevo el botón de tu familiar para pedir un código nuevo.'; }
