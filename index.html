@@ -195,6 +195,7 @@ const DIFFS = {
   dificil: { name: 'Difícil', info: 'Rueda de 6 letras', dots: 3 }
 };
 const LEVEL_COST = 1;
+const START_CREDITS = 30;
 const HINT_COST = 1;
 const GRACE_MIN = 30; /* minutos antes de la hora en que ya se puede marcar la dosis */
 const LS_KEY = 'rueda-de-palabras-v1';
@@ -248,7 +249,7 @@ function migrate() {
 function newProfile(name) {
   return {
     id: uid(), name: name, color: COLORS[state.profiles.length % COLORS.length],
-    diff: 'facil', credits: 3,
+    diff: 'facil', credits: START_CREDITS,
     progress: { facil: 0, normal: 0, dificil: 0 }, current: null, saved: {}, family: [], pendingClaim: null, pendingCode: null,
     meds: { times: ['08:00', '14:00', '20:00'], perDose: 5, claims: {}, alerts: {} },
     stats: { levels: 0, words: 0, bonus: 0, days: {} }
@@ -529,7 +530,7 @@ function viewWho() {
   let h = '<div class="top">' + brand() + '</div>';
   if (!ps.length) {
     h += '<div class="stack" style="margin-top:20px"><div class="hello"><h1 style="font-size:34px">¡Hola! Vamos a empezar</h1>' +
-      '<p style="margin-top:8px">Escribe el nombre de quien va a jugar. Empieza con 3 fichas de regalo.</p></div>' +
+      '<p style="margin-top:8px">Escribe el nombre de quien va a jugar. Empieza con ' + START_CREDITS + ' fichas de regalo.</p></div>' +
       '<label class="field">Nombre<input type="text" id="newname" maxlength="20" autocomplete="off" placeholder="Por ejemplo: Abuela Rosa"></label>' +
       '<div class="err" id="newerr"></div>' +
       '<button class="btn" data-act="create">Empezar a jugar</button></div>';
