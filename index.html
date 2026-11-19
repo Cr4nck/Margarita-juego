@@ -57,6 +57,10 @@ p { margin: 0; }
 .btn.gold { background: var(--accent); color: var(--accent-ink); box-shadow: 0 4px 0 rgba(120,80,0,.35); }
 .btn.danger { background: #fff; color: var(--warn); border: 2px solid var(--warn); box-shadow: none; font-size: 19px; min-height: 52px; }
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
+a.btn { text-decoration: none; text-align: center; }
+.btn.wa svg { width: 30px; height: 30px; flex: none; }
+.fam { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 2px solid var(--line); border-radius: 16px; }
+.famerr { color: var(--warn); font-weight: 700; min-height: 0; }
 .btn.small { min-height: 48px; font-size: 18px; width: auto; padding: 8px 16px; border-radius: 14px; }
 .link-btn { background: rgba(255,255,255,.88); border: 0; border-radius: 14px; color: var(--primary); text-decoration: underline; font-size: 19px; min-height: 48px; padding: 0 16px; }
 
@@ -199,6 +203,7 @@ const COLORS = ['#1B6B58', '#A8480F', '#2F55A4', '#7B4390', '#8A6D00'];
 const IC = {
   coin: '<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14" fill="#fff6d6" stroke="#8A6200" stroke-width="2.5"/><circle cx="16" cy="16" r="9" fill="none" stroke="#8A6200" stroke-width="2"/><path d="M16 10.5v11M12.8 13.2c.8-1.3 5.6-1.6 5.9.6.3 2-5.8 1.2-5.5 3.7.2 2 4.6 2 6-.4" fill="none" stroke="#8A6200" stroke-width="1.8" stroke-linecap="round"/></svg>',
   pill: '<svg viewBox="0 0 32 32" aria-hidden="true"><g transform="rotate(-40 16 16)"><rect x="3" y="10" width="26" height="12" rx="6" fill="#fff" stroke="currentColor" stroke-width="2.5"/><path d="M16 10v12" stroke="currentColor" stroke-width="2.5"/><path d="M6 16h7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" opacity=".45"/><rect x="16" y="10" width="13" height="12" rx="6" fill="currentColor" opacity=".25"/></g></svg>',
+  chat: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>',
   back: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
   gear: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.8 1.8M16.7 16.7l1.8 1.8M18.5 5.5l-1.8 1.8M7.3 16.7l-1.8 1.8"/></svg>',
   shuffle: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h3.5c5 0 6 10 11 10H21M3 17h3.5c1.8 0 3-1 4-2.4M13.5 9.4C14.5 8 15.7 7 17.5 7H21"/><path d="M18.5 4.5L21 7l-2.5 2.5M18.5 14.5L21 17l-2.5 2.5"/></svg>',
@@ -232,15 +237,15 @@ function newState() { return { v: 1, lv: LV, sound: true, vol: 3, pin: '1234', r
 function migrate() {
   if (state.sound === undefined) state.sound = true;
   if (!state.vol) state.vol = 3;
-  state.profiles.forEach(p => { if (!p.saved) p.saved = {}; });
+  state.profiles.forEach(p => { if (!p.saved) p.saved = {}; if (!p.family) p.family = []; if (!p.meds.alerts) p.meds.alerts = {}; });
   if (state.lv !== LV) { state.profiles.forEach(p => { if (p.current) { p.credits += LEVEL_COST; p.current = null; } Object.keys(p.saved).forEach(k => { p.credits += LEVEL_COST; }); p.saved = {}; }); state.lv = LV; }
 }
 function newProfile(name) {
   return {
     id: uid(), name: name, color: COLORS[state.profiles.length % COLORS.length],
     diff: 'facil', credits: 3,
-    progress: { facil: 0, normal: 0, dificil: 0 }, current: null, saved: {},
-    meds: { times: ['08:00', '14:00', '20:00'], perDose: 5, claims: {} },
+    progress: { facil: 0, normal: 0, dificil: 0 }, current: null, saved: {}, family: [], pendingClaim: null,
+    meds: { times: ['08:00', '14:00', '20:00'], perDose: 5, claims: {}, alerts: {} },
     stats: { levels: 0, words: 0, bonus: 0, days: {} }
   };
 }
@@ -321,6 +326,7 @@ const SND = {
   hint() { tone(1174.7, 0, 0.14, 'triangle', 0.14); tone(1568, 0.09, 0.26, 'triangle', 0.12); },
   win() { [523.25, 659.25, 783.99, 1046.5, 783.99, 1046.5].forEach((f, i) => tone(f, i * 0.14, 0.4, 'sine', 0.2)); },
   coin() { tone(988, 0, 0.12, 'square', 0.07); tone(1319, 0.1, 0.45, 'square', 0.07); },
+  bell() { [880, 1108.7, 1318.5, 1108.7, 880].forEach((f, i) => tone(f, i * 0.3, 0.55, 'sine', 0.22)); },
   shuffle() { [400, 500, 620].forEach((f, i) => tone(f, i * 0.05, 0.09, 'triangle', 0.1)); }
 };
 document.addEventListener('pointerdown', function () { audio(); }, true);
@@ -361,6 +367,66 @@ function claimDose(p) {
   SND.coin();
   return true;
 }
+/* ===== Familia: aviso por WhatsApp ===== */
+function waNumber(raw) {
+  let d = String(raw || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (/^9\d{8}$/.test(d)) d = '56' + d;
+  return d.length >= 10 && d.length <= 15 ? d : '';
+}
+function famList(p) { return (p.family || []).filter(c => c.name && waNumber(c.phone)); }
+function waLink(p, c, time) {
+  const msg = 'Hola ' + c.name + ', soy ' + p.name + '. Ya tomé mis remedios de las ' + time + ' 💊 Te aviso desde Margarita 🌼';
+  return 'https://wa.me/' + waNumber(c.phone) + '?text=' + encodeURIComponent(msg);
+}
+const PENDING_MAX_MIN = 30;
+function finishPending(ok) {
+  const p = prof(); if (!p || !p.pendingClaim) return;
+  if (Date.now() - p.pendingClaim.ts > PENDING_MAX_MIN * 60000) { p.pendingClaim = null; persist(); return; }
+  if (!ok) return;
+  p.pendingClaim = null;
+  if (claimDose(p)) popCoins = true;
+  persist(); modal = null; render();
+  const c = $('#creditNum'); if (c) c.textContent = p.credits;
+}
+
+/* ===== Aviso a la hora del remedio (con la app abierta) ===== */
+const REMIND_EVERY_MIN = 10, REMIND_MAX = 3, REMIND_WINDOW_MIN = 60;
+function checkReminders() {
+  const p = prof(); if (!p || modal || view === 'who' || view === 'care') return;
+  const now = new Date(), nowM = now.getHours() * 60 + now.getMinutes(), today = dayKey(now);
+  const al = p.meds.alerts = p.meds.alerts || {};
+  Object.keys(al).forEach(k => { if (k.indexOf(today) !== 0) delete al[k]; });
+  const s = medStatus(p);
+  if (s.st !== 'ready') return;
+  const since = nowM - minutes(s.time);
+  if (since < 0 || since >= REMIND_WINDOW_MIN) return;
+  const key = today + '|' + s.time, rec = al[key];
+  if (rec && (rec.n >= REMIND_MAX || Date.now() - rec.at < REMIND_EVERY_MIN * 60000)) return;
+  al[key] = { n: rec ? rec.n + 1 : 1, at: Date.now() }; persist();
+  openModal({ t: 'remind', time: s.time });
+  SND.bell();
+  try { if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]); } catch (e) {}
+}
+
+/* ===== Calendario del teléfono (.ics) ===== */
+const EMBEDDED = (function () { try { return window.self !== window.top; } catch (e) { return true; } })();
+function icsText(p) {
+  let tz = 'America/Santiago';
+  try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || tz; } catch (e) {}
+  const d = new Date(), ymd = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate());
+  const stamp = d.toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Margarita//ES', 'CALSCALE:GREGORIAN'];
+  p.meds.times.filter(Boolean).sort().forEach(t => {
+    const hm = t.replace(':', '');
+    L.push('BEGIN:VEVENT', 'UID:margarita-' + p.id + '-' + hm + '@margarita', 'DTSTAMP:' + stamp,
+      'DTSTART;TZID=' + tz + ':' + ymd + 'T' + hm + '00', 'DURATION:PT10M', 'RRULE:FREQ=DAILY',
+      'SUMMARY:Hora de tus remedios', 'DESCRIPTION:Después abre Margarita para recargar tus fichas.',
+      'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:Hora de tus remedios', 'TRIGGER:PT0M', 'END:VALARM', 'END:VEVENT');
+  });
+  L.push('END:VCALENDAR');
+  return L.join('\r\n') + '\r\n';
+}
+
 function medCard(p) {
   const s = medStatus(p);
   if (s.st === 'ready') {
@@ -663,7 +729,19 @@ function viewCare() {
     h += '</div><button class="btn small alt" data-act="addtime">Agregar horario</button>' +
       '<div class="row between"><span>Fichas por dosis</span><span class="stepper"><button data-act="dose" data-n="-1" aria-label="Menos">−</button><b>' + p.meds.perDose + '</b><button data-act="dose" data-n="1" aria-label="Más">+</button></span></div>' +
       '<p class="note">La recarga se habilita desde ' + GRACE_MIN + ' minutos antes de cada hora y se puede usar una vez por horario.</p><hr>' +
-      '<button class="btn small danger" data-act="delperson">Quitar a ' + esc(p.name) + '</button></div>';
+      '<h3 style="font-size:21px">Avisar a la familia</h3>' +
+      '<p class="note">Al tocar «Ya los tomé», se abre WhatsApp con un mensaje ya escrito para su hijo, nieto u otro familiar, y las fichas llegan cuando vuelve al juego. No comprueba que tomó el remedio, pero la familia queda enterada. Si no agregas a nadie, la recarga funciona como antes.</p>';
+    (p.family || []).forEach((c, i) => {
+      h += '<div class="fam"><label class="field">Nombre<input type="text" maxlength="20" data-f="fname" data-i="' + i + '" value="' + esc(c.name || '') + '" placeholder="Ej.: Claudio"></label>' +
+        '<label class="field">WhatsApp<input type="tel" inputmode="tel" data-f="fphone" data-i="' + i + '" value="' + esc(c.phone || '') + '" placeholder="+56 9 1234 5678"></label>' +
+        '<div class="famerr">' + ((c.phone && !waNumber(c.phone)) ? 'Revisa el número. Ejemplo: +56 9 1234 5678' : '') + '</div>' +
+        '<button class="btn small danger" data-act="delfam" data-i="' + i + '">Quitar</button></div>';
+    });
+    if ((p.family || []).length < 3) h += '<button class="btn small alt" data-act="addfam">Agregar familiar</button>';
+    h += '<hr><h3 style="font-size:21px">Avisos de los remedios</h3>' +
+      '<p class="note">Con la aplicación abierta, suena y vibra a la hora de cada remedio, y se repite hasta 2 veces más, cada 10 minutos. Con la aplicación cerrada solo avisa el propio teléfono: agrega los horarios al calendario o crea alarmas en el reloj.</p>' +
+      (EMBEDDED ? '' : '<button class="btn small alt" data-act="ics">Agregar al calendario del teléfono</button><p class="note">El aviso del calendario puede llegar unos minutos antes, según cómo esté configurado.</p>') +
+      '<hr><button class="btn small danger" data-act="delperson">Quitar a ' + esc(p.name) + '</button></div>';
   });
   h += '<div class="card stack"><h2>Sonido</h2>' +
     '<label class="switch"><input type="checkbox" id="sndon"' + (state.sound ? ' checked' : '') + '> Sonido activado</label>' +
@@ -706,6 +784,19 @@ function renderModal() {
     const q = state.profiles.find(x => x.id === modal.id);
     h = '<h2>¿Quitar a ' + esc(q ? q.name : '') + '?</h2><p>Se borrarán su progreso y sus fichas. No se puede deshacer.</p>' +
       '<button class="btn danger" data-act="delok">Sí, quitar</button><button class="btn alt" data-act="close">No, volver</button>';
+  } else if (modal.t === 'remind') {
+    h = '<div class="pill-state" style="color:var(--primary)">' + IC.pill + '<span>Aviso</span></div><h2>Es hora de tus remedios</h2>' +
+      '<p>Son las ' + esc(modal.time) + '. Tómalos con calma y después toca el botón para recibir tus fichas.</p>' +
+      '<button class="btn gold" data-act="claim">Ya los tomé: +' + p.meds.perDose + ' fichas</button><button class="btn alt" data-act="close">Más tarde</button>';
+  } else if (modal.t === 'family') {
+    h = '<h2>Avisa a tu familia</h2><p>Para recibir tus fichas, cuéntales que ya tomaste tus remedios de las ' + esc(modal.time) + '.</p>';
+    famList(p).forEach(c => {
+      h += '<a class="btn wa" data-act="wa" href="' + esc(waLink(p, c, modal.time)) + '" target="_blank" rel="noopener">' + IC.chat + '<span>Avisar a ' + esc(c.name) + '</span></a>';
+    });
+    h += modal.sent
+      ? '<p class="note">Cuando envíes el mensaje, vuelve a Margarita y recibirás tus fichas.</p><button class="btn gold" data-act="wadone">Ya envié el mensaje</button>'
+      : '<p class="note">Se abrirá WhatsApp con el mensaje ya escrito. Solo toca enviar y vuelve aquí.</p>';
+    h += '<button class="btn alt" data-act="close">Cancelar</button>';
   } else if (modal.t === 'newperson') {
     h = '<h2>Nuevo jugador</h2><label class="field">Nombre<input type="text" id="newname" maxlength="20" autocomplete="off"></label><div class="err" id="newerr"></div>' +
       '<button class="btn" data-act="create">Agregar</button><button class="btn alt" data-act="close">Cancelar</button>';
@@ -739,11 +830,22 @@ document.addEventListener('click', function (e) {
   }
   else if (a === 'claim') {
     if (state.requirePin && !(modal && modal.t === 'pin')) { openModal({ t: 'pin', then: 'claim' }); return; }
+    if (famList(p).length) {
+      const st = medStatus(p);
+      if (st.st !== 'ready') { closeModal(); render(); return; }
+      openModal({ t: 'family', time: st.time }); return;
+    }
     if (claimDose(p)) {
       popCoins = true; modal = null; render();
       const c = $('#creditNum'); if (c) c.textContent = p.credits;
     }
   }
+  else if (a === 'wa') {
+    p.pendingClaim = { time: modal ? modal.time : '', ts: Date.now() }; persist();
+    setTimeout(function () { if (modal && modal.t === 'family') { modal.sent = true; renderModal(); } }, 600);
+    return; /* el enlace abre WhatsApp */
+  }
+  else if (a === 'wadone') finishPending(true);
   else if (a === 'care') openModal({ t: 'pin', then: 'care' });
   else if (a === 'pinok') {
     const v = ($('#pininput').value || '').trim();
@@ -764,6 +866,17 @@ document.addEventListener('click', function (e) {
   else if (a === 'addtime') { const q = pOf(b); q.meds.times.push('12:00'); persist(); render(); }
   else if (a === 'deltime') { const q = pOf(b); q.meds.times.splice(+b.dataset.i, 1); persist(); render(); }
   else if (a === 'dose') { const q = pOf(b); q.meds.perDose = Math.max(1, Math.min(20, q.meds.perDose + +b.dataset.n)); persist(); render(); }
+  else if (a === 'addfam') { const q = pOf(b); q.family = q.family || []; if (q.family.length < 3) q.family.push({ name: '', phone: '' }); persist(); render(); }
+  else if (a === 'delfam') { const q = pOf(b); q.family.splice(+b.dataset.i, 1); persist(); render(); }
+  else if (a === 'ics') {
+    const q = pOf(b);
+    if (!q.meds.times.filter(Boolean).length) return;
+    try {
+      const url = URL.createObjectURL(new Blob([icsText(q)], { type: 'text/calendar' })), l = document.createElement('a');
+      l.href = url; l.download = 'Margarita-remedios.ics'; document.body.appendChild(l); l.click(); l.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    } catch (err) {}
+  }
   else if (a === 'delperson') openModal({ t: 'delperson', id: pOf(b).id });
   else if (a === 'delok') {
     state.profiles = state.profiles.filter(x => x.id !== modal.id);
@@ -785,6 +898,13 @@ document.addEventListener('change', function (e) {
   const q = state.profiles.find(x => x.id === card.dataset.pid); if (!q) return;
   if (t.dataset.f === 'name') { q.name = (t.value || '').trim() || q.name; persist(); }
   else if (t.dataset.f === 'time') { if (t.value) { q.meds.times[+t.dataset.i] = t.value; persist(); } }
+  else if (t.dataset.f === 'fname') { const c = q.family[+t.dataset.i]; if (c) { c.name = (t.value || '').trim(); persist(); } }
+  else if (t.dataset.f === 'fphone') {
+    const c = q.family[+t.dataset.i]; if (!c) return;
+    c.phone = (t.value || '').trim(); persist();
+    const er = t.closest('.fam') && t.closest('.fam').querySelector('.famerr');
+    if (er) er.textContent = (c.phone && !waNumber(c.phone)) ? 'Revisa el número. Ejemplo: +56 9 1234 5678' : '';
+  }
 });
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Enter') {
@@ -811,6 +931,16 @@ document.addEventListener('keydown', function (e) {
   if (state.profiles.length === 1) { state.active = state.profiles[0].id; view = 'home'; }
   render();
   initDb();
+  const pp = prof();
+  if (pp && pp.pendingClaim) finishPending(Date.now() - pp.pendingClaim.ts > 3000);
+  checkReminders();
+  setInterval(checkReminders, 20000);
+  let hiddenAt = 0;
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { hiddenAt = Date.now(); return; }
+    finishPending(Date.now() - hiddenAt > 2500);
+    checkReminders();
+  });
 })();
 </script>
 <script>
