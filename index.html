@@ -58,6 +58,8 @@ p { margin: 0; }
 .btn.danger { background: #fff; color: var(--warn); border: 2px solid var(--warn); box-shadow: none; font-size: 19px; min-height: 52px; }
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
 a.btn { text-decoration: none; text-align: center; }
+.secret { -webkit-text-security: disc; }
+.bigcode { font-family: var(--font-display); font-size: 76px; font-weight: 700; letter-spacing: .14em; text-align: center; color: var(--primary); background: #fff; border: 3px solid var(--line); border-radius: 20px; padding: 10px 0 10px .14em; }
 .btn.wa svg { width: 30px; height: 30px; flex: none; }
 .fam { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 2px solid var(--line); border-radius: 16px; }
 .famerr { color: var(--warn); font-weight: 700; min-height: 0; }
@@ -226,6 +228,7 @@ let state = loadLocal() || newState();
 migrate();
 let view = 'who';
 let modal = null;
+let confirmInfo = null;
 let game = null;
 let dbDoc = null;
 let dbOk = false;
@@ -233,10 +236,12 @@ let saveTimer = null, saving = false, dirty = false;
 let popCoins = false;
 
 function uid() { return 'p' + Math.random().toString(36).slice(2, 9); }
-function newState() { return { v: 1, lv: LV, sound: true, vol: 3, pin: '1234', requirePin: false, active: null, profiles: [], updatedAt: 0 }; }
+function newState() { return { v: 1, lv: LV, sound: true, vol: 3, pin: '1234', requirePin: false, famKey: '', requireCode: false, active: null, profiles: [], updatedAt: 0 }; }
 function migrate() {
   if (state.sound === undefined) state.sound = true;
   if (!state.vol) state.vol = 3;
+  if (state.famKey === undefined) state.famKey = '';
+  if (state.requireCode === undefined) state.requireCode = false;
   state.profiles.forEach(p => { if (!p.saved) p.saved = {}; if (!p.family) p.family = []; if (!p.meds.alerts) p.meds.alerts = {}; });
   if (state.lv !== LV) { state.profiles.forEach(p => { if (p.current) { p.credits += LEVEL_COST; p.current = null; } Object.keys(p.saved).forEach(k => { p.credits += LEVEL_COST; }); p.saved = {}; }); state.lv = LV; }
 }
@@ -244,7 +249,7 @@ function newProfile(name) {
   return {
     id: uid(), name: name, color: COLORS[state.profiles.length % COLORS.length],
     diff: 'facil', credits: 3,
-    progress: { facil: 0, normal: 0, dificil: 0 }, current: null, saved: {}, family: [], pendingClaim: null,
+    progress: { facil: 0, normal: 0, dificil: 0 }, current: null, saved: {}, family: [], pendingClaim: null, pendingCode: null,
     meds: { times: ['08:00', '14:00', '20:00'], perDose: 5, claims: {}, alerts: {} },
     stats: { levels: 0, words: 0, bonus: 0, days: {} }
   };
@@ -336,6 +341,7 @@ const $ = (s, r) => (r || document).querySelector(s);
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function pad(n) { return String(n).padStart(2, '0'); }
 function dayKey(d) { d = d || new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+function dayStr(d) { d = d || new Date(); return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()); }
 function prof() { return state.profiles.find(p => p.id === state.active) || null; }
 function minutes(t) { const a = t.split(':').map(Number); return a[0] * 60 + a[1]; }
 function levelOf(diff, idx) { const L = LEVELS[diff]; return L[idx % L.length]; }
@@ -375,8 +381,68 @@ function waNumber(raw) {
 }
 function famList(p) { return (p.family || []).filter(c => c.name && waNumber(c.phone)); }
 function waLink(p, c, time) {
-  const msg = 'Hola ' + c.name + ', soy ' + p.name + '. Ya tomé mis remedios de las ' + time + ' 💊 Te aviso desde Margarita 🌼';
+  let msg = 'Hola ' + c.name + ', soy ' + p.name + '. Ya tomé mis remedios de las ' + time + ' 💊';
+  if (codeMode(p) && p.pendingCode) msg += ' Para darme el código de mis fichas, abre este enlace: ' + famLink(p);
+  else msg += ' Te aviso desde Margarita 🌼';
   return 'https://wa.me/' + waNumber(c.phone) + '?text=' + encodeURIComponent(msg);
+}
+
+/* ===== Código dinámico de la familia (HMAC-SHA256 en JS, sin servidor) ===== */
+const SHA = (function () {
+  const pr = []; for (let n = 2; pr.length < 64; n++) { if (pr.every(q => n % q)) pr.push(n); }
+  return { K: pr.map(q => Math.floor((Math.cbrt(q) % 1) * 4294967296)), H: pr.slice(0, 8).map(q => Math.floor((Math.sqrt(q) % 1) * 4294967296)) };
+})();
+function sha256(m) {
+  const H = SHA.H.slice(), K = SHA.K, l = m.length, buf = new Uint8Array(((l + 9 + 63) >> 6) << 6);
+  buf.set(m); buf[l] = 0x80;
+  const dv = new DataView(buf.buffer);
+  dv.setUint32(buf.length - 8, Math.floor(l * 8 / 4294967296)); dv.setUint32(buf.length - 4, (l * 8) >>> 0);
+  const w = new Uint32Array(64);
+  for (let o = 0; o < buf.length; o += 64) {
+    for (let i = 0; i < 16; i++) w[i] = dv.getUint32(o + i * 4);
+    for (let i = 16; i < 64; i++) {
+      const a = w[i - 15], b = w[i - 2];
+      w[i] = (w[i - 16] + (((a >>> 7) | (a << 25)) ^ ((a >>> 18) | (a << 14)) ^ (a >>> 3)) + w[i - 7] + (((b >>> 17) | (b << 15)) ^ ((b >>> 19) | (b << 13)) ^ (b >>> 10))) >>> 0;
+    }
+    let a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+    for (let i = 0; i < 64; i++) {
+      const t1 = (h + (((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7))) + ((e & f) ^ (~e & g)) + K[i] + w[i]) >>> 0;
+      const t2 = ((((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10))) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+      h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    [a, b, c, d, e, f, g, h].forEach((x, i) => { H[i] = (H[i] + x) >>> 0; });
+  }
+  const out = new Uint8Array(32), ov = new DataView(out.buffer);
+  H.forEach((x, i) => ov.setUint32(i * 4, x));
+  return out;
+}
+function hmac256(key, msg) {
+  const enc = new TextEncoder(); let k = enc.encode(key); if (k.length > 64) k = sha256(k);
+  const ip = new Uint8Array(64), op = new Uint8Array(64);
+  for (let i = 0; i < 64; i++) { const x = k[i] || 0; ip[i] = x ^ 0x36; op[i] = x ^ 0x5c; }
+  const m = enc.encode(msg), inner = new Uint8Array(64 + m.length); inner.set(ip); inner.set(m, 64);
+  const outer = new Uint8Array(96); outer.set(op); outer.set(sha256(inner), 64);
+  return sha256(outer);
+}
+function famCode(key, r, t, d) {
+  const h = hmac256(String(key || '').trim().toLowerCase(), r + '|' + t + '|' + d);
+  return String((((h[0] << 24) | (h[1] << 16) | (h[2] << 8) | h[3]) >>> 0) % 10000).padStart(4, '0');
+}
+function codeMode(p) { return !!(p && state.requireCode && state.famKey && famList(p).length); }
+function newChallenge(p, time) {
+  const a = new Uint32Array(1);
+  try { crypto.getRandomValues(a); } catch (e) { a[0] = Math.floor(Math.random() * 4294967296); }
+  p.pendingCode = { r: String(a[0] % 1000000).padStart(6, '0'), t: time, d: dayStr(), tries: 0, ts: Date.now() };
+  persist();
+}
+function famBase() { return (/^https?:$/.test(location.protocol) && !EMBEDDED) ? location.origin + location.pathname : 'https://cr4nck.github.io/Margarita-juego/'; }
+function famLink(p) { const c = p.pendingCode; return famBase() + '?r=' + c.r + '&t=' + c.t.replace(':', '') + '&d=' + c.d + '&n=' + encodeURIComponent(p.name); }
+function readConfirm() {
+  try {
+    const q = new URLSearchParams(location.search), r = q.get('r'), t = q.get('t'), d = q.get('d');
+    if (!/^\d{6}$/.test(r || '') || !/^\d{4}$/.test(t || '') || !/^\d{8}$/.test(d || '')) return null;
+    return { r: r, t: t, d: d, n: (q.get('n') || '').slice(0, 20) };
+  } catch (e) { return null; }
 }
 const PENDING_MAX_MIN = 30;
 function finishPending(ok) {
@@ -392,7 +458,7 @@ function finishPending(ok) {
 /* ===== Aviso a la hora del remedio (con la app abierta) ===== */
 const REMIND_EVERY_MIN = 10, REMIND_MAX = 3, REMIND_WINDOW_MIN = 60;
 function checkReminders() {
-  const p = prof(); if (!p || modal || view === 'who' || view === 'care') return;
+  const p = prof(); if (!p || modal || view === 'who' || view === 'care' || view === 'confirm') return;
   const now = new Date(), nowM = now.getHours() * 60 + now.getMinutes(), today = dayKey(now);
   const al = p.meds.alerts = p.meds.alerts || {};
   Object.keys(al).forEach(k => { if (k.indexOf(today) !== 0) delete al[k]; });
@@ -453,6 +519,7 @@ function render() {
   else if (view === 'home') app.innerHTML = viewHome();
   else if (view === 'game') { app.innerHTML = viewGame(); setupGame(); }
   else if (view === 'care') app.innerHTML = viewCare();
+  else if (view === 'confirm') app.innerHTML = viewConfirm();
   renderModal();
 }
 
@@ -743,7 +810,14 @@ function viewCare() {
       (EMBEDDED ? '' : '<button class="btn small alt" data-act="ics">Agregar al calendario del teléfono</button><p class="note">El aviso del calendario puede llegar unos minutos antes, según cómo esté configurado.</p>') +
       '<hr><button class="btn small danger" data-act="delperson">Quitar a ' + esc(p.name) + '</button></div>';
   });
-  h += '<div class="card stack"><h2>Sonido</h2>' +
+  const famAny = state.profiles.some(q => famList(q).length);
+  h += '<div class="card stack"><h2>Código de la familia</h2>' +
+    '<label class="switch"><input type="checkbox" id="reqcode"' + (state.requireCode ? ' checked' : '') + '> Pedir un código para dar las fichas</label>' +
+    '<label class="field">Clave de la familia<input type="text" id="famkey" class="secret" autocomplete="off" value="' + esc(state.famKey || '') + '" placeholder="Una palabra que solo sepa la familia"></label>' +
+    ((state.requireCode && (!state.famKey || !famAny)) ? '<div class="err">Falta la clave o un familiar con número. Mientras tanto, la recarga usa solo el mensaje.</div>' : '') +
+    '<p class="note">Con esto activado, el mensaje de WhatsApp lleva un enlace. Tu familiar lo abre, ve un código de 4 números que cambia cada vez y se lo responde a ella; solo con ese código recibe las fichas. La primera vez, cada familiar escribe esta misma clave en su teléfono. Ella no conoce la clave, así que no puede inventar el código.' +
+    (state.pin === '1234' ? ' Cambia el PIN (hoy es 1234), porque aquí se ve la clave.' : '') + '</p></div>' +
+    '<div class="card stack"><h2>Sonido</h2>' +
     '<label class="switch"><input type="checkbox" id="sndon"' + (state.sound ? ' checked' : '') + '> Sonido activado</label>' +
     '<div class="row between"><span>Volumen</span><span class="stepper"><button data-act="vol" data-n="-1" aria-label="Bajar volumen">−</button><b>' + (state.vol || 3) + '</b><button data-act="vol" data-n="1" aria-label="Subir volumen">+</button></span></div>' +
     '<p class="note">Sube el volumen del celular o de la tablet si no se escucha bien.</p></div>' +
@@ -754,6 +828,26 @@ function viewCare() {
     '<p class="note">' + (dbOk ? 'El progreso se guarda en tu cuenta y también en este dispositivo.' : 'El progreso se guarda solo en este dispositivo.') + '</p></div>' +
     '<button class="btn alt" data-act="newperson">Agregar jugador</button></div>';
   return h;
+}
+
+/* ===== Vista: el familiar confirma (abre el enlace de WhatsApp) ===== */
+function viewConfirm() {
+  const c = confirmInfo, t = c.t.slice(0, 2) + ':' + c.t.slice(2), n = c.n || 'Tu familiar';
+  let h = '<div class="top">' + brand() + '</div><div class="stack" style="margin-top:10px"><div class="card stack">';
+  if (c.d !== dayStr()) {
+    h += '<h2>Este aviso ya venció</h2><p>Es de otro día. Pídele que toque de nuevo «Ya los tomé» para recibir un aviso nuevo.</p>';
+  } else if (!state.famKey) {
+    h += '<h2>Clave de la familia</h2><p>Es la primera vez en este teléfono. Escribe la clave de la familia para ver el código.</p>' +
+      '<label class="field">Clave<input type="text" id="confkey" class="secret" autocomplete="off" data-enter="[data-act=confsave]"></label><div class="err" id="conferr"></div>' +
+      '<button class="btn" data-act="confsave">Guardar y ver el código</button>';
+  } else {
+    const code = famCode(state.famKey, c.r, c.t, c.d);
+    h += '<h2>' + esc(n) + ' pide su código</h2><p>Dice que ya tomó sus remedios de las ' + esc(t) + '. Si es verdad, respóndele con este código:</p>' +
+      '<div class="bigcode" aria-label="Código">' + code + '</div>' +
+      '<a class="btn wa" href="https://wa.me/?text=' + encodeURIComponent('Tu código para las fichas es: ' + code) + '" target="_blank" rel="noopener">' + IC.chat + '<span>Enviar el código por WhatsApp</span></a>' +
+      '<p class="note">Este código solo sirve para esta vez y no se repite.</p><button class="btn small alt" data-act="confkey">Cambiar la clave</button>';
+  }
+  return h + '</div><button class="btn alt" data-act="confexit">Ir al juego</button></div>';
 }
 
 /* ===== Ventanas ===== */
@@ -793,6 +887,14 @@ function renderModal() {
     famList(p).forEach(c => {
       h += '<a class="btn wa" data-act="wa" href="' + esc(waLink(p, c, modal.time)) + '" target="_blank" rel="noopener">' + IC.chat + '<span>Avisar a ' + esc(c.name) + '</span></a>';
     });
+    if (modal.code) {
+      h += '<p class="note">Se abrirá WhatsApp con el mensaje ya escrito. Cuando tu familiar te responda con un código de 4 números, vuelve aquí y escríbelo.</p>' +
+        '<label class="field">Código que te enviaron<input type="tel" inputmode="numeric" maxlength="4" id="codeinput" autocomplete="off" data-enter="[data-act=codeok]"></label>' +
+        '<div class="err" id="codeerr">' + esc(modal.err || '') + '</div>' +
+        '<button class="btn gold" data-act="codeok">Confirmar el código</button><button class="btn alt" data-act="close">Cancelar</button>';
+      el.innerHTML = '<div class="overlay"><div class="modal" role="dialog" aria-modal="true">' + h + '</div></div>';
+      return;
+    }
     h += modal.sent
       ? '<p class="note">Cuando envíes el mensaje, vuelve a Margarita y recibirás tus fichas.</p><button class="btn gold" data-act="wadone">Ya envié el mensaje</button>'
       : '<p class="note">Se abrirá WhatsApp con el mensaje ya escrito. Solo toca enviar y vuelve aquí.</p>';
@@ -818,7 +920,7 @@ document.addEventListener('click', function (e) {
   else if (a === 'who') go('who');
   else if (a === 'newperson') openModal({ t: 'newperson' });
   else if (a === 'home') { game = null; go('home'); }
-  else if (a === 'close') closeModal();
+  else if (a === 'close') { if (modal && modal.t === 'family' && p) { p.pendingCode = null; persist(); } closeModal(); }
   else if (a === 'diff') { p.diff = b.dataset.d; persist(); render(); }
   else if (a === 'play') {
     if (pendingOf(p, p.diff)) { resumeLevel(p, p.diff); go('game'); }
@@ -833,7 +935,8 @@ document.addEventListener('click', function (e) {
     if (famList(p).length) {
       const st = medStatus(p);
       if (st.st !== 'ready') { closeModal(); render(); return; }
-      openModal({ t: 'family', time: st.time }); return;
+      if (codeMode(p)) newChallenge(p, st.time);
+      openModal({ t: 'family', time: st.time, code: codeMode(p) }); return;
     }
     if (claimDose(p)) {
       popCoins = true; modal = null; render();
@@ -841,11 +944,38 @@ document.addEventListener('click', function (e) {
     }
   }
   else if (a === 'wa') {
+    if (codeMode(p)) return; /* el enlace abre WhatsApp; las fichas se dan con el código */
     p.pendingClaim = { time: modal ? modal.time : '', ts: Date.now() }; persist();
     setTimeout(function () { if (modal && modal.t === 'family') { modal.sent = true; renderModal(); } }, 600);
     return; /* el enlace abre WhatsApp */
   }
   else if (a === 'wadone') finishPending(true);
+  else if (a === 'codeok') {
+    const pc = p && p.pendingCode; if (!pc) { closeModal(); return; }
+    const v = ($('#codeinput').value || '').trim();
+    if (/^\d{4}$/.test(v) && v === famCode(state.famKey, pc.r, pc.t.replace(':', ''), pc.d)) {
+      p.pendingCode = null; persist();
+      if (claimDose(p)) popCoins = true;
+      modal = null; render();
+      const c = $('#creditNum'); if (c) c.textContent = p.credits;
+    } else {
+      pc.tries++;
+      if (pc.tries >= 3) { newChallenge(p, pc.t); modal.err = 'Ese código no coincide y ya no quedan intentos. Toca de nuevo el botón de tu familiar para pedir un código nuevo.'; }
+      else { persist(); modal.err = 'El código no coincide. Te quedan ' + (3 - pc.tries) + (3 - pc.tries === 1 ? ' intento.' : ' intentos.'); }
+      renderModal();
+    }
+  }
+  else if (a === 'confsave') {
+    const v = ($('#confkey').value || '').trim().toLowerCase();
+    if (!v) { $('#conferr').textContent = 'Escribe la clave.'; return; }
+    state.famKey = v; persist(); render();
+  }
+  else if (a === 'confkey') { state.famKey = ''; persist(); render(); }
+  else if (a === 'confexit') {
+    confirmInfo = null;
+    try { history.replaceState(null, '', location.pathname); } catch (err) {}
+    go(state.profiles.length === 1 ? 'home' : 'who');
+  }
   else if (a === 'care') openModal({ t: 'pin', then: 'care' });
   else if (a === 'pinok') {
     const v = ($('#pininput').value || '').trim();
@@ -893,6 +1023,8 @@ function pOf(btn) { const c = btn.closest('[data-pid]'); return state.profiles.f
 document.addEventListener('change', function (e) {
   const t = e.target;
   if (t.id === 'reqpin') { state.requirePin = t.checked; persist(); return; }
+  if (t.id === 'reqcode') { state.requireCode = t.checked; persist(); render(); return; }
+  if (t.id === 'famkey') { state.famKey = (t.value || '').trim().toLowerCase(); persist(); render(); return; }
   if (t.id === 'sndon') { state.sound = t.checked; persist(); if (state.sound) SND.ok(); return; }
   const card = t.closest && t.closest('[data-pid]'); if (!card) return;
   const q = state.profiles.find(x => x.id === card.dataset.pid); if (!q) return;
@@ -908,6 +1040,8 @@ document.addEventListener('change', function (e) {
 });
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Enter') {
+    const en = e.target && e.target.dataset && e.target.dataset.enter, m2 = en && $(en);
+    if (m2) { e.preventDefault(); m2.click(); return; }
     const m = $('#modal .btn:not(.alt):not(.danger)') || $('#app .btn[data-act="create"]');
     if (e.target.tagName === 'INPUT' && e.target.type !== 'checkbox' && m && (modal || view === 'who')) { e.preventDefault(); m.click(); }
   }
@@ -929,10 +1063,17 @@ document.addEventListener('keydown', function (e) {
 (function init() {
   if (state.profiles.length && (!prof())) state.active = state.profiles[0].id;
   if (state.profiles.length === 1) { state.active = state.profiles[0].id; view = 'home'; }
+  confirmInfo = readConfirm();
+  if (confirmInfo) view = 'confirm';
   render();
   initDb();
   const pp = prof();
   if (pp && pp.pendingClaim) finishPending(Date.now() - pp.pendingClaim.ts > 3000);
+  if (pp && pp.pendingCode) {
+    const c = pp.pendingCode, st = medStatus(pp);
+    if (view !== 'confirm' && codeMode(pp) && st.st === 'ready' && st.time === c.t && c.d === dayStr() && Date.now() - c.ts < 3 * 3600000) openModal({ t: 'family', time: c.t, code: true });
+    else { pp.pendingCode = null; persist(); }
+  }
   checkReminders();
   setInterval(checkReminders, 20000);
   let hiddenAt = 0;
